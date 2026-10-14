@@ -1,6 +1,8 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from td.models import VALID_STATES, Task, slugify
+import pytest
+
+from td.models import VALID_STATES, Task, parse_duration, slugify
 
 
 class TestSlugify:
@@ -67,3 +69,56 @@ class TestTask:
 
     def test_valid_states(self):
         assert VALID_STATES == ("focus", "active", "later", "done")
+
+    def test_to_dict_omits_snoozed_until_when_unset(self):
+        assert "snoozed_until" not in self._make_task().to_dict()
+
+    def test_round_trip_snoozed_until(self):
+        until = datetime(2026, 1, 4, 12, 0, 0)
+        restored = Task.from_dict(self._make_task(snoozed_until=until).to_dict())
+        assert restored.snoozed_until == until
+
+    def test_from_dict_without_snoozed_until(self):
+        d = self._make_task().to_dict()
+        assert Task.from_dict(d).snoozed_until is None
+
+
+class TestSnooze:
+    NOW = datetime(2026, 1, 1, 12, 0, 0)
+
+    def _make_task(self, **overrides) -> Task:
+        return Task(
+            id="t", title="T", state="active", created=self.NOW, updated=self.NOW, **overrides
+        )
+
+    def test_not_snoozed_by_default(self):
+        assert not self._make_task().is_snoozed(self.NOW)
+
+    def test_snoozed_while_active(self):
+        task = self._make_task(snoozed_until=self.NOW + timedelta(hours=4))
+        assert task.is_snoozed(self.NOW)
+        assert task.is_snoozed(self.NOW + timedelta(hours=3, minutes=59))
+
+    def test_not_snoozed_after_expiry(self):
+        task = self._make_task(snoozed_until=self.NOW + timedelta(hours=4))
+        assert not task.is_snoozed(self.NOW + timedelta(hours=4))
+        assert not task.is_snoozed(self.NOW + timedelta(days=1))
+
+
+class TestParseDuration:
+    @pytest.mark.parametrize(
+        "text, expected",
+        [
+            ("4h", timedelta(hours=4)),
+            ("3d", timedelta(days=3)),
+            ("1h", timedelta(hours=1)),
+            ("10D", timedelta(days=10)),
+        ],
+    )
+    def test_valid(self, text, expected):
+        assert parse_duration(text) == expected
+
+    @pytest.mark.parametrize("text", ["", "4", "h", "0h", "-1d", "2w", "1.5h", "3 d", "4hours"])
+    def test_invalid(self, text):
+        with pytest.raises(ValueError):
+            parse_duration(text)

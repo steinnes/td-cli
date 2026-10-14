@@ -45,12 +45,15 @@ td later <id>                        Park it
 td done <id>                         Mark finished
 td ls                                List non-done tasks
 td ls --state focus                  Filter by state
-td ls --all                          Include done
+td ls --all                          Include done and snoozed
+td ls --snoozed                      List snoozed tasks
 td ls --json                         Machine-readable output
 td tree                              Hierarchical view
 td tree <id>                         Subtree from a node
 td show <id>                         Full detail on one task
 td status                            Summary counts
+td snooze <id> <duration>            Hide from ls/tree for a while (4h, 3d)
+td unsnooze <id>                     Bring a snoozed task back early
 td edit <id> --title/--notes/--parent   Modify a task
 td mv <id> <parent-id>              Move under a parent
 td rm <id>                           Delete (confirms first)
@@ -82,6 +85,8 @@ parent: auth
 created: 2026-02-10T14:30:00
 updated: 2026-02-10T14:30:00
 ```
+
+A snoozed task also has `snoozed_until`. Once that time passes, the task shows up again; the field is left in place and ignored.
 
 ## Development
 
