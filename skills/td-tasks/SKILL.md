@@ -42,7 +42,8 @@ td done <id>        # → done (finished)
 
 ```bash
 td ls                    # all non-done tasks, human-readable table
-td ls --all              # include done tasks
+td ls --all              # include done and snoozed tasks
+td ls --snoozed          # only snoozed tasks
 td ls --state focus      # filter by state
 td ls --json             # JSON output for programmatic use
 td tree                  # hierarchical view
@@ -50,6 +51,15 @@ td tree <id>             # subtree from specific node
 td show <id>             # full detail on one task
 td status                # summary counts by state
 ```
+
+### Snooze
+
+```bash
+td snooze <id> 4h        # hide from ls/tree for 4 hours (or 3d for 3 days)
+td unsnooze <id>         # bring it back early
+```
+
+Snoozing keeps the task's state; it reappears by itself when the snooze expires.
 
 ### Modify and remove
 

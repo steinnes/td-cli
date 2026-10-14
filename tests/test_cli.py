@@ -1,11 +1,12 @@
 import json
 import os
+from datetime import datetime, timedelta
 
 import pytest
 from click.testing import CliRunner
 
 from td.cli import cli
-from td.store import init_project, load_task
+from td.store import init_project, load_task, save_task
 
 
 @pytest.fixture
@@ -236,3 +237,161 @@ class TestStatus:
         assert "active: 1" in result.output
         assert "later: 1" in result.output
         assert "total: 3" in result.output
+
+
+PAST = datetime(2000, 1, 1, 0, 0, 0)
+FAR_FUTURE = datetime(2999, 1, 1, 0, 0, 0)
+
+
+def set_snoozed_until(project, task_id, until):
+    task = load_task(project, task_id)
+    task.snoozed_until = until
+    save_task(project, task)
+
+
+def listed_ids(result):
+    return [line.split()[1] for line in result.output.strip().splitlines()[1:]]
+
+
+class TestSnooze:
+    def test_snooze_hours_sets_expiry(self, runner, project):
+        invoke(runner, ["add", "Task"], project)
+        before = datetime.now()
+        result = invoke(runner, ["snooze", "task", "4h"], project)
+        after = datetime.now()
+        assert result.exit_code == 0
+        until = load_task(project, "task").snoozed_until
+        assert before + timedelta(hours=4) <= until <= after + timedelta(hours=4)
+
+    def test_snooze_days_sets_expiry(self, runner, project):
+        invoke(runner, ["add", "Task"], project)
+        before = datetime.now()
+        invoke(runner, ["snooze", "task", "3d"], project)
+        after = datetime.now()
+        until = load_task(project, "task").snoozed_until
+        assert before + timedelta(days=3) <= until <= after + timedelta(days=3)
+
+    def test_snooze_keeps_state(self, runner, project):
+        invoke(runner, ["add", "Task", "--state", "focus"], project)
+        invoke(runner, ["snooze", "task", "1d"], project)
+        assert load_task(project, "task").state == "focus"
+
+    def test_snooze_invalid_duration(self, runner, project):
+        invoke(runner, ["add", "Task"], project)
+        result = invoke(runner, ["snooze", "task", "2w"], project)
+        assert result.exit_code != 0
+        assert load_task(project, "task").snoozed_until is None
+
+    def test_snooze_missing_task(self, runner, project):
+        result = invoke(runner, ["snooze", "nope", "1d"], project)
+        assert result.exit_code != 0
+
+    def test_snoozed_hidden_from_ls(self, runner, project):
+        invoke(runner, ["add", "Sleepy"], project)
+        invoke(runner, ["add", "Awake"], project)
+        invoke(runner, ["snooze", "sleepy", "4h"], project)
+        result = invoke(runner, ["ls"], project)
+        assert listed_ids(result) == ["awake"]
+
+    def test_snoozed_hidden_from_ls_state_filter(self, runner, project):
+        invoke(runner, ["add", "Sleepy", "--state", "focus"], project)
+        invoke(runner, ["snooze", "sleepy", "4h"], project)
+        result = invoke(runner, ["ls", "--state", "focus"], project)
+        assert "sleepy" not in result.output
+
+    def test_snoozed_hidden_from_ls_json(self, runner, project):
+        invoke(runner, ["add", "Sleepy"], project)
+        invoke(runner, ["snooze", "sleepy", "4h"], project)
+        result = invoke(runner, ["ls", "--json"], project)
+        assert json.loads(result.output) == []
+
+    def test_snoozed_hidden_from_tree(self, runner, project):
+        invoke(runner, ["add", "Sleepy"], project)
+        invoke(runner, ["add", "Awake"], project)
+        invoke(runner, ["snooze", "sleepy", "4h"], project)
+        result = invoke(runner, ["tree"], project)
+        assert "awake [active]" in result.output
+        assert "sleepy" not in result.output
+
+    def test_ls_all_includes_snoozed(self, runner, project):
+        invoke(runner, ["add", "Sleepy"], project)
+        invoke(runner, ["snooze", "sleepy", "4h"], project)
+        result = invoke(runner, ["ls", "--all"], project)
+        assert "sleepy" in listed_ids(result)
+
+    def test_visible_after_expiry(self, runner, project):
+        invoke(runner, ["add", "Sleepy"], project)
+        set_snoozed_until(project, "sleepy", PAST)
+        assert listed_ids(invoke(runner, ["ls"], project)) == ["sleepy"]
+        assert "sleepy [active]" in invoke(runner, ["tree"], project).output
+        data = json.loads(invoke(runner, ["ls", "--json"], project).output)
+        assert [t["id"] for t in data] == ["sleepy"]
+
+    def test_ls_snoozed_lists_only_active_snoozes(self, runner, project):
+        invoke(runner, ["add", "Sleepy"], project)
+        invoke(runner, ["add", "Expired"], project)
+        invoke(runner, ["add", "Awake"], project)
+        set_snoozed_until(project, "sleepy", FAR_FUTURE)
+        set_snoozed_until(project, "expired", PAST)
+        result = invoke(runner, ["ls", "--snoozed"], project)
+        assert result.exit_code == 0
+        assert listed_ids(result) == ["sleepy"]
+        assert "2999-01-01" in result.output
+
+    def test_ls_snoozed_empty(self, runner, project):
+        invoke(runner, ["add", "Awake"], project)
+        result = invoke(runner, ["ls", "--snoozed"], project)
+        assert "No tasks" in result.output
+
+    def test_ls_snoozed_json(self, runner, project):
+        invoke(runner, ["add", "Sleepy"], project)
+        set_snoozed_until(project, "sleepy", FAR_FUTURE)
+        result = invoke(runner, ["ls", "--snoozed", "--json"], project)
+        data = json.loads(result.output)
+        assert data == [
+            {
+                "id": "sleepy",
+                "title": "Sleepy",
+                "state": "active",
+                "snoozed_until": "2999-01-01T00:00:00",
+            }
+        ]
+
+    def test_ls_snoozed_with_state_filter(self, runner, project):
+        invoke(runner, ["add", "Focused", "--state", "focus"], project)
+        invoke(runner, ["add", "Parked", "--state", "later"], project)
+        set_snoozed_until(project, "focused", FAR_FUTURE)
+        set_snoozed_until(project, "parked", FAR_FUTURE)
+        result = invoke(runner, ["ls", "--snoozed", "--state", "later"], project)
+        assert listed_ids(result) == ["parked"]
+
+    def test_unsnooze(self, runner, project):
+        invoke(runner, ["add", "Sleepy"], project)
+        invoke(runner, ["snooze", "sleepy", "3d"], project)
+        result = invoke(runner, ["unsnooze", "sleepy"], project)
+        assert result.exit_code == 0
+        assert load_task(project, "sleepy").snoozed_until is None
+        assert listed_ids(invoke(runner, ["ls"], project)) == ["sleepy"]
+        assert "sleepy" not in invoke(runner, ["ls", "--snoozed"], project).output
+
+    def test_unsnooze_not_snoozed(self, runner, project):
+        invoke(runner, ["add", "Awake"], project)
+        result = invoke(runner, ["unsnooze", "awake"], project)
+        assert result.exit_code == 0
+        assert "not snoozed" in result.output
+
+    def test_unsnooze_missing_task(self, runner, project):
+        result = invoke(runner, ["unsnooze", "nope"], project)
+        assert result.exit_code != 0
+
+    def test_show_displays_active_snooze(self, runner, project):
+        invoke(runner, ["add", "Sleepy"], project)
+        set_snoozed_until(project, "sleepy", FAR_FUTURE)
+        result = invoke(runner, ["show", "sleepy"], project)
+        assert "snoozed: until 2999-01-01 00:00:00" in result.output
+
+    def test_show_hides_expired_snooze(self, runner, project):
+        invoke(runner, ["add", "Sleepy"], project)
+        set_snoozed_until(project, "sleepy", PAST)
+        result = invoke(runner, ["show", "sleepy"], project)
+        assert "snoozed" not in result.output

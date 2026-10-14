@@ -64,6 +64,18 @@ class TestSaveLoadTask:
         assert loaded.title == task.title
         assert loaded.state == task.state
 
+    def test_save_and_load_snoozed_until(self, project):
+        until = datetime(2026, 1, 4, 12, 0, 0)
+        save_task(project, make_task(snoozed_until=until))
+        assert load_task(project, "test-task").snoozed_until == until
+
+    def test_loads_file_without_snoozed_until(self, project):
+        (project / ".td" / "tasks" / "legacy.yaml").write_text(
+            "id: legacy\ntitle: Legacy\nstate: active\n"
+            "created: 2026-02-10T14:30:00\nupdated: 2026-02-10T14:30:00\n"
+        )
+        assert load_task(project, "legacy").snoozed_until is None
+
     def test_load_missing_raises(self, project):
         with pytest.raises(FileNotFoundError):
             load_task(project, "nope")

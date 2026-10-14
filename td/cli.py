@@ -6,7 +6,7 @@ from importlib.resources import files
 
 import click
 
-from td.models import VALID_STATES, Task, slugify
+from td.models import VALID_STATES, Task, parse_duration, slugify
 from td.store import (
     delete_task,
     find_td_root,
@@ -107,6 +107,43 @@ def done(id: str):
     _set_state(id, "done")
 
 
+def _parse_duration_option(ctx, param, value: str):
+    try:
+        return parse_duration(value)
+    except ValueError as e:
+        raise click.BadParameter(str(e)) from e
+
+
+@cli.command()
+@click.argument("id")
+@click.argument("duration", callback=_parse_duration_option)
+def snooze(id: str, duration):
+    """Hide a task from listings for DURATION (e.g. 4h, 3d)."""
+    root = find_td_root()
+    task = load_task(root, id)
+    now = datetime.now()
+    task.snoozed_until = now + duration
+    task.updated = now
+    save_task(root, task)
+    click.echo(f"{id} snoozed until {task.snoozed_until:%Y-%m-%d %H:%M}")
+
+
+@cli.command()
+@click.argument("id")
+def unsnooze(id: str):
+    """Bring a snoozed task back before its snooze expires."""
+    root = find_td_root()
+    task = load_task(root, id)
+    now = datetime.now()
+    if not task.is_snoozed(now):
+        click.echo(f"{id} is not snoozed")
+        return
+    task.snoozed_until = None
+    task.updated = now
+    save_task(root, task)
+    click.echo(f"{id} unsnoozed")
+
+
 @cli.command(name="ls")
 @click.option(
     "--state",
@@ -115,16 +152,25 @@ def done(id: str):
     type=click.Choice(VALID_STATES, case_sensitive=False),
     help="Filter by state.",
 )
-@click.option("--all", "show_all", is_flag=True, help="Show all tasks including done.")
+@click.option(
+    "--all", "show_all", is_flag=True, help="Show all tasks including done and snoozed."
+)
+@click.option("--snoozed", "only_snoozed", is_flag=True, help="Show only snoozed tasks.")
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
-def ls_cmd(filter_state: str | None, show_all: bool, as_json: bool):
+def ls_cmd(filter_state: str | None, show_all: bool, only_snoozed: bool, as_json: bool):
     """List tasks."""
     root = find_td_root()
     tasks = load_all_tasks(root)
+    now = datetime.now()
+
+    if only_snoozed:
+        tasks = [t for t in tasks if t.is_snoozed(now)]
+    elif not show_all:
+        tasks = [t for t in tasks if not t.is_snoozed(now)]
 
     if filter_state:
         tasks = [t for t in tasks if t.state == filter_state]
-    elif not show_all:
+    elif not show_all and not only_snoozed:
         tasks = [t for t in tasks if t.state != "done"]
 
     # Sort: focus first, then active, then later, then done
@@ -137,6 +183,8 @@ def ls_cmd(filter_state: str | None, show_all: bool, as_json: bool):
             entry: dict = {"id": t.id, "title": t.title, "state": t.state}
             if t.parent:
                 entry["parent"] = t.parent
+            if t.is_snoozed(now):
+                entry["snoozed_until"] = t.snoozed_until.isoformat()
             out.append(entry)
         click.echo(json.dumps(out, indent=2))
         return
@@ -148,9 +196,21 @@ def ls_cmd(filter_state: str | None, show_all: bool, as_json: bool):
     # Calculate column widths
     id_width = max(len(t.id) for t in tasks)
     state_width = max(len(t.state) for t in tasks)
-    click.echo(f"{'STATE':<{state_width}}  {'ID':<{id_width}}  TITLE")
+    if not any(t.is_snoozed(now) for t in tasks):
+        click.echo(f"{'STATE':<{state_width}}  {'ID':<{id_width}}  TITLE")
+        for t in tasks:
+            click.echo(f"{t.state:<{state_width}}  {t.id:<{id_width}}  {t.title}")
+        return
+
+    until_width = len("YYYY-MM-DD HH:MM")
+    click.echo(
+        f"{'STATE':<{state_width}}  {'ID':<{id_width}}  {'SNOOZED UNTIL':<{until_width}}  TITLE"
+    )
     for t in tasks:
-        click.echo(f"{t.state:<{state_width}}  {t.id:<{id_width}}  {t.title}")
+        until = f"{t.snoozed_until:%Y-%m-%d %H:%M}" if t.is_snoozed(now) else ""
+        click.echo(
+            f"{t.state:<{state_width}}  {t.id:<{id_width}}  {until:<{until_width}}  {t.title}"
+        )
 
 
 @cli.command()
@@ -160,8 +220,9 @@ def tree(id: str | None):
     root = find_td_root()
     tasks = load_all_tasks(root)
 
-    # By default hide done
-    tasks = [t for t in tasks if t.state != "done"]
+    # By default hide done and snoozed
+    now = datetime.now()
+    tasks = [t for t in tasks if t.state != "done" and not t.is_snoozed(now)]
 
     task_map = {t.id: t for t in tasks}
     children: dict[str | None, list[Task]] = {}
@@ -197,6 +258,8 @@ def show(id: str):
         click.echo(f"parent:  {task.parent}")
     if task.notes:
         click.echo(f"notes:   {task.notes}")
+    if task.is_snoozed(datetime.now()):
+        click.echo(f"snoozed: until {task.snoozed_until}")
     click.echo(f"created: {task.created}")
     click.echo(f"updated: {task.updated}")
 

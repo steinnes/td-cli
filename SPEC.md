@@ -52,6 +52,7 @@ updated: 2026-02-10T14:30:00
 | `state`   | enum     | yes      | focus / active / later / done         |
 | `parent`  | string   | no       | ID of parent task (for tree structure)|
 | `notes`   | string   | no       | Free-form longer description          |
+| `snoozed_until` | datetime | no | Hidden from `ls`/`tree` until this time |
 | `created` | datetime | yes      | When the task was created             |
 | `updated` | datetime | yes      | Last modification time                |
 
@@ -124,7 +125,8 @@ td done <id>                         Mark finished
 td ls                                List all non-done tasks
 td ls --state focus                  Filter by state
 td ls --state done                   Show completed tasks
-td ls --all                          Show everything including done
+td ls --all                          Show everything including done and snoozed
+td ls --snoozed                      Show only snoozed tasks
 td ls --json                         Machine-readable output (for LLMs/scripts)
 
 td tree                              Hierarchical view of all non-done tasks
@@ -136,6 +138,16 @@ td status                            Summary counts by state
 ```
 
 By default, `done` tasks are hidden. Use `--state done` or `--all` to see them.
+
+### Snoozing Tasks
+
+```
+td snooze <id> 4h                    Hide from ls/tree for 4 hours
+td snooze <id> 3d                    Hide from ls/tree for 3 days
+td unsnooze <id>                     Show again before the snooze expires
+```
+
+Snoozing does not change a task's state. When the snooze expires the task reappears on its own.
 
 ### Modifying Tasks
 
